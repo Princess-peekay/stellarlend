@@ -1,0 +1,93 @@
+name: Rust CI
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "stellar-lend/**"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - "stellar-lend/**"
+      - ".github/workflows/ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+defaults:
+  run:
+    working-directory: stellar-lend
+
+jobs:
+  test:
+    name: Rust tests and coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy, llvm-tools-preview
+
+      - name: Cache Cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            stellar-lend/target
+          key: ${{ runner.os }}-rust-ci-${{ hashFiles('stellar-lend/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-rust-ci-
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Run tests with cargo-nextest
+        run: cargo nextest run --workspace --all-features --no-fail-fast
+
+      - name: Run documentation tests
+        run: cargo test --workspace --all-features --doc
+
+      - name: Enforce coverage thresholds
+        run: >-
+          cargo llvm-cov nextest --workspace --all-features
+          --fail-under-lines 70
+          --fail-under-functions 70
+          --fail-under-regions 70
+          --lcov --output-path coverage.lcov
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-coverage-${{ github.sha }}
+          path: stellar-lend/coverage.lcov
+          if-no-files-found: ignore
+          retention-days: 30
